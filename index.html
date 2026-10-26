@@ -1,0 +1,1568 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>DeepInfer 深度解读 · DeepSeek 开源推理引擎与 vLLM 的差异、使用方法</title>
+<meta name="description" content="DeepSeek 于 2026 年 10 月开源内部推理框架 DeepInfer：架构拆解、相对 vLLM 的关键改进、硬件要求、快速上手与选型建议。">
+<style>
+  :root {
+    --accent: #4d6bfe;
+    --accent-soft: rgba(77, 107, 254, .10);
+    --accent-line: rgba(77, 107, 254, .28);
+    --bg: #f6f7fb;
+    --surface: #ffffff;
+    --surface-2: #f0f2f9;
+    --text: #111624;
+    --muted: #5b6478;
+    --border: #e3e6ef;
+    --code-bg: #0f1422;
+    --code-text: #dbe2f4;
+    --shadow: 0 1px 2px rgba(16, 24, 40, .04), 0 8px 24px rgba(16, 24, 40, .06);
+    --radius: 14px;
+    --maxw: 1200px;
+  }
+
+  html[data-theme="dark"] {
+    --accent: #7f93ff;
+    --accent-soft: rgba(127, 147, 255, .13);
+    --accent-line: rgba(127, 147, 255, .35);
+    --bg: #0a0d15;
+    --surface: #111621;
+    --surface-2: #171d2b;
+    --text: #e8ecf6;
+    --muted: #98a2b8;
+    --border: #232b3c;
+    --code-bg: #070a12;
+    --code-text: #dbe2f4;
+    --shadow: 0 1px 2px rgba(0, 0, 0, .3), 0 12px 32px rgba(0, 0, 0, .35);
+  }
+
+  * { box-sizing: border-box; }
+
+  html {
+    scroll-behavior: smooth;
+    scroll-padding-top: 80px;
+    -webkit-text-size-adjust: 100%;
+  }
+
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+                 "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans SC", sans-serif;
+    font-size: 16px;
+    line-height: 1.78;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; text-underline-offset: 3px; }
+
+  ::selection { background: var(--accent-soft); }
+
+  /* ---------- progress + topbar ---------- */
+  #progress {
+    position: fixed; top: 0; left: 0; height: 3px; width: 0;
+    background: linear-gradient(90deg, var(--accent), #8f6bff);
+    z-index: 100;
+    transition: width .1s linear;
+  }
+
+  .topbar {
+    position: sticky; top: 0; z-index: 90;
+    backdrop-filter: saturate(180%) blur(14px);
+    -webkit-backdrop-filter: saturate(180%) blur(14px);
+    background: color-mix(in srgb, var(--bg) 82%, transparent);
+    border-bottom: 1px solid var(--border);
+  }
+  @supports not (background: color-mix(in srgb, red 50%, blue)) {
+    .topbar { background: var(--bg); }
+  }
+
+  .topbar-inner {
+    max-width: var(--maxw);
+    margin: 0 auto;
+    padding: 0 24px;
+    height: 60px;
+    display: flex;
+    align-items: center;
+    gap: 16px;
+  }
+
+  .brand { display: flex; align-items: center; gap: 10px; font-weight: 700; letter-spacing: -.01em; }
+  .brand-mark {
+    width: 26px; height: 26px; border-radius: 8px;
+    background: linear-gradient(135deg, var(--accent), #8f6bff);
+    display: grid; place-items: center;
+    color: #fff; font-size: 13px; font-weight: 800;
+    box-shadow: 0 4px 12px var(--accent-soft);
+  }
+  .brand small { display: block; font-size: 11px; font-weight: 500; color: var(--muted); letter-spacing: .02em; }
+
+  .topbar nav { margin-left: auto; display: flex; align-items: center; gap: 4px; }
+  .topbar nav a {
+    color: var(--muted); font-size: 13.5px; padding: 6px 10px; border-radius: 8px;
+  }
+  .topbar nav a:hover { background: var(--surface-2); color: var(--text); text-decoration: none; }
+
+  .icon-btn {
+    border: 1px solid var(--border); background: var(--surface); color: var(--muted);
+    width: 34px; height: 34px; border-radius: 9px; cursor: pointer;
+    display: grid; place-items: center; font-size: 15px;
+    transition: .2s;
+  }
+  .icon-btn:hover { color: var(--accent); border-color: var(--accent-line); }
+
+  /* ---------- layout ---------- */
+  .layout {
+    max-width: var(--maxw);
+    margin: 0 auto;
+    padding: 40px 24px 96px;
+    display: grid;
+    grid-template-columns: 208px minmax(0, 1fr);
+    gap: 48px;
+    align-items: start;
+  }
+
+  .toc { position: sticky; top: 88px; font-size: 13.5px; }
+  .toc-title {
+    font-size: 11px; letter-spacing: .12em; text-transform: uppercase;
+    color: var(--muted); font-weight: 700; margin-bottom: 12px; padding-left: 12px;
+  }
+  .toc ol { list-style: none; margin: 0; padding: 0; border-left: 1px solid var(--border); }
+  .toc li a {
+    display: block; padding: 6px 12px; color: var(--muted);
+    border-left: 2px solid transparent; margin-left: -1px; line-height: 1.45;
+  }
+  .toc li a:hover { color: var(--text); text-decoration: none; }
+  .toc li a.active { color: var(--accent); border-left-color: var(--accent); font-weight: 600; background: var(--accent-soft); }
+
+  article { min-width: 0; }
+
+  section { margin-bottom: 64px; scroll-margin-top: 84px; }
+
+  .eyebrow {
+    display: inline-flex; align-items: center; gap: 8px;
+    font-size: 11.5px; font-weight: 700; letter-spacing: .14em;
+    text-transform: uppercase; color: var(--accent);
+  }
+  .eyebrow::before { content: ""; width: 18px; height: 2px; background: var(--accent); border-radius: 2px; }
+
+  h2 {
+    font-size: clamp(23px, 2.4vw, 30px);
+    line-height: 1.3; margin: 12px 0 8px; letter-spacing: -.02em;
+    text-wrap: balance;
+  }
+  h3 { font-size: 17.5px; margin: 30px 0 10px; letter-spacing: -.01em; text-wrap: balance; }
+  h4 { font-size: 15px; margin: 22px 0 8px; }
+  p { margin: 12px 0; }
+  .lead { color: var(--muted); font-size: 16.5px; margin-top: 10px; }
+
+
+  /* ---------- hero ---------- */
+  .hero {
+    position: relative;
+    border-radius: 22px;
+    padding: 44px 40px 36px;
+    color: #eef1fa;
+    overflow: hidden;
+    background:
+      radial-gradient(900px 400px at 88% -10%, rgba(122, 92, 255, .55), transparent 60%),
+      radial-gradient(700px 380px at 8% 110%, rgba(77, 107, 254, .45), transparent 60%),
+      linear-gradient(160deg, #0b1020 0%, #121a33 55%, #0d1224 100%);
+    border: 1px solid rgba(255, 255, 255, .07);
+    box-shadow: 0 24px 60px rgba(10, 16, 40, .28);
+    scroll-margin-top: 84px;
+  }
+  .hero::after {
+    content: ""; position: absolute; inset: 0; pointer-events: none;
+    background-image:
+      linear-gradient(rgba(255, 255, 255, .045) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(255, 255, 255, .045) 1px, transparent 1px);
+    background-size: 46px 46px;
+    mask-image: radial-gradient(circle at 70% 20%, #000 0%, transparent 72%);
+    -webkit-mask-image: radial-gradient(circle at 70% 20%, #000 0%, transparent 72%);
+  }
+  .hero > * { position: relative; z-index: 1; }
+  .hero .eyebrow { color: #a9b7ff; }
+  .hero .eyebrow::before { background: #a9b7ff; }
+  .hero h1 {
+    font-size: clamp(32px, 4.2vw, 46px);
+    line-height: 1.08; margin: 14px 0 6px; letter-spacing: -.035em;
+    text-wrap: balance;
+  }
+  .hero h1 .line { display: block; }
+  .hero h1 .line-1 {
+    background: linear-gradient(96deg, #fff 20%, #a9b7ff 90%);
+    -webkit-background-clip: text; background-clip: text; color: transparent;
+  }
+  .hero h1 .line-2 {
+    font-size: .84em; letter-spacing: -.04em;
+    margin-top: .14em; color: #f2f4fb; text-wrap: balance;
+  }
+  .hero .sub { font-size: 17px; color: #b9c3dd; max-width: 640px; margin: 10px 0 0; }
+  .hero .sub b { color: #fff; font-weight: 600; }
+
+  .badges { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 24px; }
+  .badge {
+    font-size: 12px; padding: 5px 11px; border-radius: 999px;
+    background: rgba(255, 255, 255, .07);
+    border: 1px solid rgba(255, 255, 255, .14);
+    color: #d7deef; white-space: nowrap;
+  }
+  .badge b { color: #fff; font-weight: 600; }
+
+  .hero-stats {
+    display: grid; grid-template-columns: repeat(4, 1fr); gap: 1px;
+    margin-top: 32px; border-radius: 14px; overflow: hidden;
+    background: rgba(255, 255, 255, .1);
+    border: 1px solid rgba(255, 255, 255, .1);
+  }
+  .hero-stat { background: rgba(11, 16, 32, .55); padding: 16px 18px; }
+  .hero-stat .k { font-size: 21px; font-weight: 750; letter-spacing: -.02em; color: #fff; font-variant-numeric: tabular-nums; }
+  .hero-stat .v { font-size: 11.5px; color: #97a3c2; margin-top: 2px; line-height: 1.5; }
+
+  /* ---------- callouts ---------- */
+  .note, .warn, .tip {
+    border-radius: 12px; padding: 14px 18px; margin: 20px 0;
+    font-size: 14.5px; line-height: 1.72;
+    border: 1px solid var(--border); background: var(--surface);
+  }
+  .note { border-left: 3px solid var(--accent); background: var(--accent-soft); }
+  .warn { border-left: 3px solid #e0a02a; background: rgba(224, 160, 42, .09); }
+  .tip { border-left: 3px solid #2fa97a; background: rgba(47, 169, 122, .09); }
+  .note strong, .warn strong, .tip strong { color: var(--text); }
+  .note p:first-child, .warn p:first-child, .tip p:first-child { margin-top: 0; }
+  .note p:last-child, .warn p:last-child, .tip p:last-child { margin-bottom: 0; }
+
+  /* ---------- cards ---------- */
+  .grid { display: grid; gap: 16px; }
+  .grid-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .grid-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 20px 22px;
+    box-shadow: var(--shadow);
+  }
+  .card h4 { margin: 0 0 6px; font-size: 15.5px; }
+  .card p { margin: 6px 0; font-size: 14.5px; color: var(--muted); line-height: 1.7; }
+  .card .kicker { font-size: 11.5px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; color: var(--accent); }
+
+  /* ---------- improvement blocks ---------- */
+  .improve {
+    border: 1px solid var(--border);
+    background: var(--surface);
+    border-radius: var(--radius);
+    padding: 24px 26px;
+    margin: 18px 0;
+    box-shadow: var(--shadow);
+  }
+  .improve-head { display: flex; align-items: flex-start; gap: 14px; }
+  .improve-idx {
+    flex: none; width: 30px; height: 30px; border-radius: 9px;
+    display: grid; place-items: center;
+    background: var(--accent-soft); color: var(--accent);
+    border: 1px solid var(--accent-line);
+    font-weight: 800; font-size: 13px; font-variant-numeric: tabular-nums;
+    margin-top: 2px;
+  }
+  .improve-head h3 { margin: 0; font-size: 17.5px; }
+  .improve-head .sub { color: var(--muted); font-size: 13px; margin-top: 2px; }
+  .improve-body { margin-top: 14px; }
+  .improve-body p { font-size: 14.8px; margin: 8px 0; }
+
+  .delta {
+    display: grid; grid-template-columns: 92px minmax(0, 1fr);
+    gap: 2px 14px; margin-top: 14px;
+    font-size: 14.2px; line-height: 1.7;
+  }
+  .delta dt {
+    font-size: 11.5px; font-weight: 700; letter-spacing: .06em;
+    color: var(--muted); padding-top: 3px; text-transform: uppercase;
+  }
+  .delta dd { margin: 0; }
+  .delta .gain dd { color: var(--text); font-weight: 500; }
+
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; }
+  .chip {
+    font-size: 11.5px; padding: 3px 9px; border-radius: 6px;
+    background: var(--surface-2); color: var(--muted);
+    border: 1px solid var(--border); font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  .chip.blue { background: var(--accent-soft); color: var(--accent); border-color: var(--accent-line); }
+
+  /* ---------- arch diagram ---------- */
+  .arch {
+    border: 1px solid var(--border); border-radius: var(--radius);
+    background: var(--surface); padding: 10px; margin: 22px 0; box-shadow: var(--shadow);
+  }
+  .arch-row {
+    display: grid; grid-template-columns: 132px minmax(0, 1fr);
+    gap: 16px; align-items: center; padding: 14px 14px;
+  }
+  .arch-row + .arch-row { border-top: 1px dashed var(--border); }
+  .arch-label { font-size: 12px; font-weight: 700; color: var(--muted); letter-spacing: .04em; }
+  .arch-label em { display: block; font-style: normal; font-weight: 500; font-size: 11px; color: var(--muted); opacity: .75; letter-spacing: 0; }
+  .arch-items { display: flex; flex-wrap: wrap; gap: 6px; }
+  .node {
+    font-size: 12.5px; padding: 5px 10px; border-radius: 8px;
+    background: var(--surface-2); border: 1px solid var(--border); color: var(--text);
+    white-space: nowrap;
+  }
+  .node.hot { background: var(--accent-soft); border-color: var(--accent-line); color: var(--accent); font-weight: 600; }
+  .node.hw { background: var(--code-bg); color: var(--code-text); border-color: transparent; }
+
+  /* ---------- table ---------- */
+  .table-wrap {
+    overflow-x: auto; border: 1px solid var(--border); border-radius: var(--radius);
+    background: var(--surface); box-shadow: var(--shadow); margin: 20px 0;
+  }
+  table { border-collapse: collapse; width: 100%; font-size: 13.8px; min-width: 640px; }
+  th, td { text-align: left; padding: 12px 16px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  thead th {
+    background: var(--surface-2); font-size: 12px; letter-spacing: .03em;
+    color: var(--muted); font-weight: 700; white-space: nowrap;
+  }
+  tbody tr:last-child td { border-bottom: none; }
+  tbody tr:hover { background: var(--accent-soft); }
+  td code, th code, p code, li code, .card code {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: .88em; padding: 1px 5px; border-radius: 5px;
+    background: var(--surface-2); border: 1px solid var(--border);
+  }
+  .yes { color: #1f9d6b; font-weight: 700; }
+  .no { color: #d05252; font-weight: 700; }
+  .part { color: #c58a1c; font-weight: 700; }
+  td.hl { background: var(--accent-soft); }
+
+  ul.clean { padding-left: 20px; margin: 12px 0; }
+  ul.clean li { margin: 6px 0; font-size: 15px; }
+  ul.clean li::marker { color: var(--accent); }
+
+  /* ---------- code ---------- */
+  .code-block { position: relative; margin: 16px 0; }
+  .code-block .lang {
+    position: absolute; top: 10px; right: 56px;
+    font-size: 10.5px; letter-spacing: .1em; text-transform: uppercase;
+    color: #6c7896; font-family: ui-monospace, monospace;
+  }
+  pre {
+    margin: 0; padding: 20px 22px; overflow-x: auto;
+    background: var(--code-bg); color: var(--code-text);
+    border-radius: 12px; font-size: 13.2px; line-height: 1.75;
+    border: 1px solid rgba(255, 255, 255, .06);
+  }
+  pre code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; background: none; border: none; padding: 0; font-size: inherit; color: inherit; }
+  .copy {
+    position: absolute; top: 8px; right: 8px;
+    border: 1px solid rgba(255, 255, 255, .14);
+    background: rgba(255, 255, 255, .07); color: #aab4cc;
+    font-size: 11px; padding: 4px 9px; border-radius: 7px; cursor: pointer;
+    font-family: inherit; transition: .18s;
+  }
+  .copy:hover { background: rgba(255, 255, 255, .16); color: #fff; }
+  .copy.done { color: #7ee2b8; border-color: rgba(126, 226, 184, .4); }
+
+  /* ---------- tabs ---------- */
+  .tabs { margin: 18px 0; }
+  .tab-bar { display: flex; gap: 6px; border-bottom: 1px solid var(--border); margin-bottom: -1px; }
+  .tab-btn {
+    background: none; border: none; border-bottom: 2px solid transparent;
+    padding: 9px 14px; font-size: 13.5px; color: var(--muted); cursor: pointer;
+    font-family: inherit; font-weight: 600;
+  }
+  .tab-btn[aria-selected="true"] { color: var(--accent); border-bottom-color: var(--accent); }
+  .tab-panel[hidden] { display: none; }
+  .tab-panel { padding-top: 4px; }
+
+  /* ---------- steps ---------- */
+  .steps { counter-reset: step; margin: 24px 0; }
+  .step { position: relative; padding-left: 46px; margin-bottom: 26px; }
+  .step::before {
+    counter-increment: step; content: counter(step);
+    position: absolute; left: 0; top: 0;
+    width: 30px; height: 30px; border-radius: 50%;
+    display: grid; place-items: center;
+    background: var(--accent-soft); color: var(--accent);
+    border: 1px solid var(--accent-line);
+    font-size: 13px; font-weight: 800;
+  }
+  .step::after {
+    content: ""; position: absolute; left: 15px; top: 36px; bottom: -22px;
+    width: 1px; background: var(--border);
+  }
+  .step:last-child::after { display: none; }
+  .step h4 { margin: 3px 0 6px; font-size: 15.5px; }
+  .step p { margin: 6px 0; font-size: 14.6px; }
+
+  /* ---------- faq ---------- */
+  details {
+    border: 1px solid var(--border); border-radius: 12px;
+    background: var(--surface); padding: 0 18px; margin: 10px 0;
+    box-shadow: var(--shadow);
+  }
+  details[open] { border-color: var(--accent-line); }
+  summary {
+    cursor: pointer; padding: 15px 0; font-weight: 600; font-size: 15px;
+    list-style: none; display: flex; align-items: center; gap: 10px;
+  }
+  summary::-webkit-details-marker { display: none; }
+  summary::before {
+    content: "+"; color: var(--accent); font-weight: 700; font-size: 18px;
+    width: 16px; flex: none; line-height: 1;
+  }
+  details[open] summary::before { content: "−"; }
+  details p, details ul { font-size: 14.6px; color: var(--muted); margin: 0 0 16px; }
+  details p strong { color: var(--text); }
+
+  /* ---------- refs ---------- */
+  .refs { list-style: none; padding: 0; margin: 18px 0; }
+  .refs li {
+    padding: 12px 0; border-bottom: 1px solid var(--border);
+    display: flex; gap: 12px; align-items: baseline; font-size: 14.4px;
+  }
+  .refs li:last-child { border-bottom: none; }
+  .refs .tag {
+    flex: none; font-size: 10.5px; letter-spacing: .06em; text-transform: uppercase;
+    color: var(--muted); font-weight: 700; width: 62px;
+  }
+  .refs .desc { color: var(--muted); font-size: 13px; display: block; }
+
+  footer {
+    border-top: 1px solid var(--border);
+    padding: 30px 24px 48px;
+    text-align: center; color: var(--muted); font-size: 13px;
+  }
+  footer .dot { margin: 0 8px; opacity: .5; }
+
+  /* ---------- responsive ---------- */
+  @media (max-width: 1080px) {
+    .layout { grid-template-columns: minmax(0, 1fr); gap: 0; padding-top: 26px; }
+    .toc { display: none; }
+    .hero { padding: 36px 26px 30px; }
+    .hero-stats { grid-template-columns: repeat(2, 1fr); }
+  }
+  @media (max-width: 720px) {
+    body { font-size: 15.5px; }
+    .topbar nav a { display: none; }
+    .grid-2, .grid-3 { grid-template-columns: minmax(0, 1fr); }
+    .arch-row { grid-template-columns: minmax(0, 1fr); gap: 8px; }
+    .improve { padding: 20px; }
+    .delta { grid-template-columns: 80px minmax(0, 1fr); font-size: 13.8px; }
+    .hero-stats { grid-template-columns: repeat(2, 1fr); }
+    .hero h1 { font-size: 34px; letter-spacing: -.03em; }
+    .hero h1 .line-2 { font-size: .78em; }
+  }
+
+  @media print {
+    .topbar, .toc, #progress, .copy { display: none !important; }
+    .layout { display: block; padding: 0; }
+    section { break-inside: avoid; }
+  }
+</style>
+</head>
+<body>
+<div id="progress"></div>
+
+<header class="topbar">
+  <div class="topbar-inner">
+    <div class="brand">
+      <span class="brand-mark">DI</span>
+      <span>DeepInfer 解读<small>DeepSeek 开源推理引擎</small></span>
+    </div>
+    <nav>
+      <a href="#what">是什么</a>
+      <a href="#vs-vllm">对比 vLLM</a>
+      <a href="#quickstart">上手</a>
+      <a href="#choose">选型</a>
+      <a href="https://github.com/deepseek-ai/DeepInfer" target="_blank" rel="noopener noreferrer">GitHub ↗</a>
+    </nav>
+    <button class="icon-btn" id="themeBtn" title="切换深色 / 浅色" aria-label="切换主题">◐</button>
+  </div>
+</header>
+
+<div class="layout">
+  <aside class="toc" aria-label="目录">
+    <div class="toc-title">目录</div>
+    <ol id="tocList">
+      <li><a href="#what" class="active">01 · 这是什么</a></li>
+      <li><a href="#why">02 · 为什么开源</a></li>
+      <li><a href="#arch">03 · 架构拆解</a></li>
+      <li><a href="#vs-vllm">04 · 相对 vLLM 的改进</a></li>
+      <li><a href="#compare">05 · 三框架横向对比</a></li>
+      <li><a href="#limits">06 · 硬件与边界</a></li>
+      <li><a href="#quickstart">07 · 快速上手</a></li>
+      <li><a href="#usage">08 · 进阶用法</a></li>
+      <li><a href="#choose">09 · 怎么选</a></li>
+      <li><a href="#faq">10 · 常见问题</a></li>
+      <li><a href="#refs">11 · 参考资料</a></li>
+    </ol>
+  </aside>
+
+  <article>
+
+    <!-- ============ HERO ============ -->
+    <section class="hero" id="top">
+      <div class="eyebrow">2026 年 10 月开源 · Apache 2.0</div>
+      <h1>
+        <span class="line line-1">DeepInfer</span>
+        <span class="line line-2">DeepSeek 跑生产的那套推理引擎</span>
+      </h1>
+      <p class="sub">
+        DeepSeek 把支撑自家线上大规模服务的推理框架开源了。它<b>并非从零重写</b>——
+        官方 README 写得很清楚：最初主要基于 <b>vLLM</b> 构建，同时借鉴了 SGLang 与 TensorRT-LLM。
+        所以真正值得看的，是它为了 DeepSeek 的模型（MLA、MoE、SWA）在哪些地方比通用框架走得更深。
+      </p>
+      <div class="badges">
+        <span class="badge"><b>仓库</b> deepseek-ai/DeepInfer</span>
+        <span class="badge"><b>模型</b> DeepSeek-V4.1-Flash</span>
+        <span class="badge"><b>硬件</b> NVIDIA SM100 · 昇腾 950</span>
+        <span class="badge"><b>环境</b> Python 3.12 · CUDA 13 / CANN 9.2</span>
+      </div>
+      <div class="hero-stats">
+        <div class="hero-stat">
+          <div class="k">4 + 64</div>
+          <div class="v">官方基准：4 卡 Prefill + 64 卡 Decode（SM100，同一 scale-up 域）</div>
+        </div>
+        <div class="hero-stat">
+          <div class="k">≤ 5</div>
+          <div class="v">DSpark 默认草稿上限 · NEXTN_DECODE</div>
+        </div>
+        <div class="hero-stat">
+          <div class="k">Apache 2.0</div>
+          <div class="v">允许商用，但当前只开源了离线推理部分</div>
+        </div>
+        <div class="hero-stat">
+          <div class="k">155 万亿</div>
+          <div class="v">第三方报道的单集群日处理 token 量（官方未逐项确认）</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ 01 WHAT ============ -->
+    <section id="what">
+      <div class="eyebrow">01 / 定位</div>
+      <h2>它是什么：一个「官方调优版」而不是「替代品」</h2>
+      <p class="lead">
+        DeepInfer 是 DeepSeek 内部的推理引擎，负责把 V4.1-Flash 跑在其自有集群上，
+        属于「模型之外、算子之上」的那层调度与执行系统。
+      </p>
+
+      <div class="code-block">
+        <span class="lang">官方定位</span>
+        <pre><code>DeepInfer is the high-performance inference framework that powers
+DeepSeek's large-scale production services. This open-source release
+provides offline inference with the core features needed for serving at scale.
+
+—— github.com/deepseek-ai/DeepInfer</code></pre>
+      </div>
+
+      <p>把它拆成三句话说清楚：</p>
+      <div class="grid grid-3">
+        <div class="card">
+          <div class="kicker">血统</div>
+          <h4>站在 vLLM 肩上</h4>
+          <p>README 致谢章节明确写着「originally built primarily on vLLM」。所以它是 vLLM 的深度定制分支式实现，而非另起炉灶。</p>
+        </div>
+        <div class="card">
+          <div class="kicker">差异化</div>
+          <h4>只为自家架构调优</h4>
+          <p>FlashMLA、DeepGEMM、DeepEP、TileKernels、DeepSelect 这些自家算子被直接焊进引擎，围绕 MLA + MoE + SWA 做端到端优化。</p>
+        </div>
+        <div class="card">
+          <div class="kicker">现状</div>
+          <h4>开源的是「离线版」</h4>
+          <p>官方明确列出未包含：KV cache 系统、VE/Prefill/Decode 分离部署、跨 DP 副本的负载均衡。在线服务能力仍需自建或等更新。</p>
+        </div>
+      </div>
+
+      <div class="note">
+        <p><strong>一句话理解：</strong>vLLM 是「什么模型都能跑」的通用底座；DeepInfer 是「只把 DeepSeek 模型跑到极致」的官方参考实现。两者不是同一维度的竞品，更像是「通用解」与「特化解」的关系。</p>
+      </div>
+    </section>
+
+    <!-- ============ 02 WHY ============ -->
+    <section id="why">
+      <div class="eyebrow">02 / 背景</div>
+      <h2>DeepSeek 为什么要把「中间层」也开源</h2>
+      <p>
+        <strong>时间线：</strong>仓库于 2026 年 10 月 16 日上线，10 月 20 日 DeepSeek 正式宣布全面开源，同步放出 deepseek-recipe。
+      </p>
+      <p>
+        DeepSeek 此前已经陆续开源了模型权重、TileLang 编译工具，以及 FlashMLA / DeepGEMM / DeepEP 等算子库。
+        但这些都是「零件」——真正决定一张卡一天能产出多少 token、烧多少电的，是中间那层推理框架。
+      </p>
+      <p>
+        官方公告里的逻辑很直白：模型能力由模型本身决定，但<strong>能否以合理成本提供超大规模服务，取决于推理框架</strong>；
+        而框架效率直接决定了算力成本与电力消耗。开源这套内部部署经验，是希望开发者与企业能优化吞吐与延迟、降低单位 token 成本。
+      </p>
+
+      <h3>这次开源的两个仓库</h3>
+      <div class="grid grid-2">
+        <div class="card">
+          <div class="kicker">主仓库</div>
+          <h4>deepseek-ai/DeepInfer</h4>
+          <p>推理引擎本体：算子集成、并行策略、投机解码、调度、结构化输出。Apache 2.0。</p>
+        </div>
+        <div class="card">
+          <div class="kicker">配套组件</div>
+          <h4>deepseek-ai/deepseek-recipe</h4>
+          <p>Rust 编写 + Python 绑定：把 Messages / Chat Completions / Responses 统一转成内部 Conversation，渲染成 prompt 并编码成 token，使自托管行为与官方 API 对齐。</p>
+        </div>
+      </div>
+
+      <div class="tip">
+        <p><strong>容易被忽略的点：</strong>很多团队自建 DeepSeek 服务时，模型跑得动，但输出和官方 API「味道不一样」——根因往往不是模型，而是 prompt 渲染与 token 编解码的细节差异。deepseek-recipe 解决的正是这个「最后一公里」的对齐问题，而且可以脱离 DeepInfer 单独使用。</p>
+      </div>
+    </section>
+
+    <!-- ============ 03 ARCH ============ -->
+    <section id="arch">
+      <div class="eyebrow">03 / 架构</div>
+      <h2>五层结构：从 API 到算子全栈打通</h2>
+      <p class="lead">DeepInfer 的价值在于把此前分散开源的一堆「零件」装成了一台整机。自下而上看，大致是这五层：</p>
+
+      <div class="arch">
+        <div class="arch-row">
+          <div class="arch-label">接入 / 编解码<em>deepseek-recipe</em></div>
+          <div class="arch-items">
+            <span class="node">Messages</span>
+            <span class="node">Chat Completions</span>
+            <span class="node">Responses</span>
+            <span class="node hot">Prompt 渲染</span>
+            <span class="node hot">Token 编解码</span>
+            <span class="node">多模态预处理</span>
+          </div>
+        </div>
+        <div class="arch-row">
+          <div class="arch-label">引擎 / 运行时<em>LLM · Scheduler</em></div>
+          <div class="arch-items">
+            <span class="node hot">异步批调度</span>
+            <span class="node">采样器</span>
+            <span class="node hot">结构化输出</span>
+            <span class="node">确定性推理</span>
+            <span class="node">KV 管理</span>
+          </div>
+        </div>
+        <div class="arch-row">
+          <div class="arch-label">并行 / 通信<em>DP · CP · EP</em></div>
+          <div class="arch-items">
+            <span class="node">Attention DP</span>
+            <span class="node">均衡 CP</span>
+            <span class="node hot">MoE EP</span>
+            <span class="node hot">EPLB 专家负载均衡</span>
+            <span class="node hot">DSpark 投机解码</span>
+          </div>
+        </div>
+        <div class="arch-row">
+          <div class="arch-label">算子层<em>自研 kernel</em></div>
+          <div class="arch-items">
+            <span class="node">FlashMLA</span>
+            <span class="node">DeepGEMM</span>
+            <span class="node">DeepEP</span>
+            <span class="node">TileKernels</span>
+            <span class="node">DeepSelect</span>
+            <span class="node">TileLang 自定义算子</span>
+          </div>
+        </div>
+        <div class="arch-row">
+          <div class="arch-label">硬件层<em>双平台</em></div>
+          <div class="arch-items">
+            <span class="node hw">NVIDIA SM100 (Blackwell)</span>
+            <span class="node hw">Huawei Ascend 950</span>
+          </div>
+        </div>
+      </div>
+
+      <p>
+        这个分层解释了一个常见疑问：<em>为什么 DeepInfer 只支持 V4.1-Flash、只支持 SM100？</em>
+        因为整条栈都是为特定模型形态和特定指令集调过的——通用性被主动牺牲，换来的是端到端效率。
+      </p>
+    </section>
+
+    <!-- ============ 04 VS VLLM ============ -->
+    <section id="vs-vllm">
+      <div class="eyebrow">04 / 核心</div>
+      <h2>相对 vLLM，它到底改了什么</h2>
+      <p class="lead">
+        逐条对应官方 README 的 Feature 列表，并标注「通用框架的常规做法」与「DeepInfer 的差异」。
+        需要强调：这些是<strong>垂直场景下的深度优化</strong>，不是 vLLM 的缺陷。
+      </p>
+
+      <div class="improve">
+        <div class="improve-head">
+          <div class="improve-idx">1</div>
+          <div>
+            <h3>FlashMLA：把 MLA 的注意力内核换成专用的</h3>
+            <div class="sub">Multi-head Latent Attention · 显存带宽是第一瓶颈</div>
+          </div>
+        </div>
+        <div class="improve-body">
+          <p>V3/V4 系列的 MLA 会把 KV 压缩成低秩潜向量，注意力的性能瓶颈从「算力」转向「KV 读取带宽」。通用框架要走 FlashAttention / FlashInfer 这类统一 backend，需要兼顾各种 head_dim 与布局，难以把 MLA 的压缩布局吃到极致。</p>
+          <dl class="delta">
+            <dt>通用做法</dt>
+            <dd>统一 attention backend + 针对 MLA 的特殊分支，兼容性优先。</dd>
+            <dt>DeepInfer</dt>
+            <dd>直接集成自家 FlashMLA，按 MLA 的压缩 KV 布局写内核，把「解压 + 注意力」融合在一趟里完成。</dd>
+            <dt>收益</dt>
+            <dd class="gain">长上下文解码时的 KV 带宽压力下降，单卡可承载更长序列 / 更高并发。</dd>
+          </dl>
+          <div class="chips">
+            <span class="chip blue">FlashMLA</span>
+            <span class="chip">decode 阶段主力</span>
+            <span class="chip">长上下文</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="improve">
+        <div class="improve-head">
+          <div class="improve-idx">2</div>
+          <div>
+            <h3>MoE EP + EPLB：让热点专家不再排队</h3>
+            <div class="sub">Expert Parallelism + Expert Parallel Load Balancer</div>
+          </div>
+        </div>
+        <div class="improve-body">
+          <p>MoE 模型每个 token 只激活少数专家，但路由是动态的：某些专家在特定 batch 里会被挤爆，其余专家却闲着。这是 MoE 服务里最典型的「木桶效应」——整批 token 的延迟由最慢的那个专家决定。</p>
+          <p>EP 把不同专家分到不同卡，token 靠 all-to-all 送到「持有该专家的卡」。关键在于：<strong>送哪儿不是写死的，而是一张运行时可改写的映射表</strong>（逻辑专家 → 物理副本 → 卡）。EPLB 不碰路由逻辑，只周期性地改写这张表。</p>
+          <p>所以「动态」不是给某个专家临时加算力，而是一个三步闭环：</p>
+          <ul class="clean">
+            <li><strong>统计</strong>：每个 step 累计本地各物理槽位收到的 token 数，写入滑动窗口（默认 100 步，示例为省显存设 3）。</li>
+            <li><strong>重算</strong>：每 N 步（示例 30）把窗口按副本映射聚合、在 EP 组内 all_reduce 成全局负载，再贪心解两件事——给哪些热门专家加冗余副本、所有副本怎么铺到各卡，使「最忙那张卡」的历史峰值最小。</li>
+            <li><strong>搬运</strong>：按新布局 shuffle 专家权重（机内走 symmetric memory / IPC 直拷，只镜像一层、逐层复用），再原子切换映射表，下一步生效。</li>
+          </ul>
+          <p>能成立的前提有三条：专家权重是独立可寻址的参数块，搬一个专家 = 拷贝一段显存 + 改索引；路由分布是慢变的，用历史窗口预测下一个窗口足够准；重排频率低，搬运可安排在 prefill 之后并逐层重叠。</p>
+          <dl class="delta">
+            <dt>通用做法</dt>
+            <dd>TP 或静态 EP，专家到卡的映射在启动时确定，靠容量因子（capacity factor）丢弃/填充来兜底。</dd>
+            <dt>DeepInfer</dt>
+            <dd>保留逻辑专家全集 + 冗余物理槽（extra 默认下限 32，按 EP 规模向上取整到可整除），按窗口负载重排副本与摆放，并在线搬运权重。</dd>
+            <dt>收益</dt>
+            <dd class="gain">最忙 rank 的峰值负载下降——被削平的是「卡与卡之间」的木桶板。</dd>
+          </dl>
+          <div class="chips">
+            <span class="chip blue">--ep / --dp / --cp</span>
+            <span class="chip blue">EPLB（默认开）</span>
+            <span class="chip">EXPERT_COUNT_WINDOW_SIZE</span>
+            <span class="chip">EXPERT_REARRANGEMENT_STEP_INTERVAL</span>
+          </div>
+          <div class="note" style="margin-top:14px">
+            <p><strong>它均衡的是「放置」，不是「路由」：</strong>单个 batch 内某专家仍可能被挤爆（那是容量因子 / 路由偏置要处理的事）；EPLB 解决的是「长期热点导致某几张卡持续拖后腿」。</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="improve">
+        <div class="improve-head">
+          <div class="improve-idx">3</div>
+          <div>
+            <h3>DSpark + 置信度调度验证：投机解码不再「一把梭」</h3>
+            <div class="sub">Speculative decoding with confidence-scheduled verification</div>
+          </div>
+        </div>
+        <div class="improve-body">
+          <p>投机解码（草稿 token + 并行验证）的收益高度依赖「草稿命中率」。固定窗口的验证策略在草稿质量差时会白白浪费算力，在草稿质量好时又没吃满加速比。</p>
+          <dl class="delta">
+            <dt>通用做法</dt>
+            <dd>n-gram / EAGLE / MTP 等草稿方案，验证策略多为固定长度或简单阈值。</dd>
+            <dt>DeepInfer</dt>
+            <dd>DSpark 生成草稿，再用「置信度估计」动态决定验证时机与长度，低置信度就少验、高置信度就多验。</dd>
+            <dt>收益</dt>
+            <dd class="gain">decode 阶段的有效吞吐提升，且避免无效验证带来的算力浪费。</dd>
+          </dl>
+          <div class="code-block">
+            <span class="lang">bash</span>
+            <pre><code># 开启变长 MTP（投机解码），草稿长度上限 5
+DEEPINFER_ENABLE_MTP_VARLEN=1 DEEPINFER_USE_NEXTN_DECODE=5 \
+  python examples/offline_inference.py</code></pre>
+          </div>
+        </div>
+      </div>
+
+      <div class="improve">
+        <div class="improve-head">
+          <div class="improve-idx">4</div>
+          <div>
+            <h3>SWA Bounded Replay：decode 阶段只重放「有界后缀」</h3>
+            <div class="sub">Sliding Window Attention · 少算一大截 prefill</div>
+          </div>
+        </div>
+        <div class="improve-body">
+          <p>滑动窗口注意力意味着模型真正「看得到」的只有最近一段上下文。DeepInfer 在 decoder 阶段复用时，只重放一个<em>有界后缀</em>，而不是把历史全量重算。</p>
+          <dl class="delta">
+            <dt>通用做法</dt>
+            <dd>依赖 prefix caching / chunked prefill 复用 KV，但不会针对 SWA 窗口做「最小必要重放」的裁剪。</dd>
+            <dt>DeepInfer</dt>
+            <dd>只重放覆盖 SWA 窗口 + 最大回溯长度的后缀，V4.1 默认保留 140 个 token。</dd>
+            <dt>收益</dt>
+            <dd class="gain">decode 路径上的 prefill 计算量显著减少，长对话/多轮场景收益更明显。</dd>
+          </dl>
+          <div class="code-block">
+            <span class="lang">bash</span>
+            <pre><code>DEEPINFER_YOCO_PREFILL_TRUNCATION_MODE=compact \
+DEEPINFER_YOCO_PREFILL_KEEP_TOKENS=140 \
+  python examples/offline_inference.py</code></pre>
+          </div>
+        </div>
+      </div>
+
+      <div class="improve">
+        <div class="improve-head">
+          <div class="improve-idx">5</div>
+          <div>
+            <h3>异步调度：CPU 组批与 GPU 计算重叠</h3>
+            <div class="sub">Zero-overhead batch scheduler · 默认开启</div>
+          </div>
+        </div>
+        <div class="improve-body">
+          <p>小 batch、短序列的 decode 场景里，CPU 侧组 batch 的开销常常追不上 GPU 的算力，导致 GPU 空转。DeepInfer 把批调度与设备执行做成异步流水，默认启用，无需配置。</p>
+          <dl class="delta">
+            <dt>通用做法</dt>
+            <dd>同步式 step 循环，调度与执行串行（vLLM 也在持续优化这一点，如异步输出处理）。</dd>
+            <dt>DeepInfer</dt>
+            <dd>零开销批调度器，CPU 侧准备工作与上一次前向计算重叠。</dd>
+            <dt>收益</dt>
+            <dd class="gain">低延迟场景下 GPU 利用率更高，小 batch 的 CPU 瓶颈被掩盖。</dd>
+          </dl>
+          <div class="chips">
+            <span class="chip blue">默认开启</span>
+            <span class="chip">DEEPINFER_LOGGING_INTERVAL_STEP 可观测</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="improve">
+        <div class="improve-head">
+          <div class="improve-idx">6</div>
+          <div>
+            <h3>Batch-invariant 与确定性采样：同输入必得同输出</h3>
+            <div class="sub">对 RL 训练、评测、回归测试是刚需</div>
+          </div>
+        </div>
+        <div class="improve-body">
+          <p>常规推理里，同一 prompt 的 logits 会随 batch 组成不同而产生数值差异（不同 kernel 的归约顺序、不同的 GEMM 分块），导致「温度=0 也不完全可复现」。这对做 RL rollout、A/B 评测、线上回归的团队是实打实的痛点。</p>
+          <dl class="delta">
+            <dt>通用做法</dt>
+            <dd>通常只保证「采样随机种子可设」，不保证跨 batch 组成的数值一致性。</dd>
+            <dt>DeepInfer</dt>
+            <dd><code>DEEPINFER_BATCH_INVARIANT=1</code> 保证不同 batch 组合下模型结果一致；再关闭变长 MTP 并传入固定 <code>seq_seed</code>，即得确定性输出（仅 NVIDIA 平台）。</dd>
+            <dt>收益</dt>
+            <dd class="gain">可复现的实验与线上回归；RL 训练与推理对齐更可靠。</dd>
+          </dl>
+          <div class="code-block">
+            <span class="lang">bash</span>
+            <pre><code>DEEPINFER_BATCH_INVARIANT=1 DEEPINFER_ENABLE_MTP_VARLEN=0 \
+  python examples/offline_inference.py</code></pre>
+          </div>
+        </div>
+      </div>
+
+      <div class="improve">
+        <div class="improve-head">
+          <div class="improve-idx">7</div>
+          <div>
+            <h3>结构化输出：regex / JSON Schema / EBNF 三件套</h3>
+            <div class="sub">约束解码作为引擎一等能力</div>
+          </div>
+        </div>
+        <div class="improve-body">
+          <p>通过 <code>SamplingParams(so_args=...)</code> 直接施加输出约束，支持正则、JSON Schema 与 EBNF 文法——比只支持 JSON 的约束更通用（例如生成 DSL、SQL 片段、专用报文格式）。</p>
+          <dl class="delta">
+            <dt>通用做法</dt>
+            <dd>vLLM 有 guided decoding（outlines / xgrammar），SGLang 有 compressed FSM，能力强弱取决于后端编译器。</dd>
+            <dt>DeepInfer</dt>
+            <dd>内置为采样器能力，三种 schema_type 统一入口，示例代码可直接对照。</dd>
+            <dt>收益</dt>
+            <dd class="gain">Agent / 工具调用 / 数据抽取场景下，省掉外层重试与解析容错逻辑。</dd>
+          </dl>
+          <div class="code-block">
+            <span class="lang">python</span>
+            <pre><code>from deepinfer.sampling_params import SamplingParams
+
+so_args = {
+    "schema_type": "ebnf",   # "regex" | "json" | "ebnf"
+    "schema": 'root ::= "answer=" ("yes" | "no") ";level=" [1-3]',
+}
+
+outs = llm.generate(
+    prompts=["请判断这条评论是否推荐该产品。"],
+    sampling_params=SamplingParams(temperature=0, max_tokens=128, so_args=so_args),
+    use_tqdm=False,
+)</code></pre>
+          </div>
+        </div>
+      </div>
+
+      <div class="improve">
+        <div class="improve-head">
+          <div class="improve-idx">8</div>
+          <div>
+            <h3>昇腾 950 原生支持：vLLM 至今没有的能力</h3>
+            <div class="sub">国产算力落地的现实选项</div>
+          </div>
+        </div>
+        <div class="improve-body">
+          <p>vLLM / SGLang 的主战场是 NVIDIA（vLLM 另有 ROCm、TPU 等插件生态），对昇腾没有官方原生支持。DeepInfer 通过 <code>DEEPINFER_ACCELERATOR=ascend</code> 一键切换构建目标，走 CANN 9.2 栈。</p>
+          <dl class="delta">
+            <dt>通用做法</dt>
+            <dd>需要第三方适配层或厂商自研框架，版本滞后、算子覆盖不全。</dd>
+            <dt>DeepInfer</dt>
+            <dd>同一套代码双后端，构建时选择 accelerator，官方承诺后续持续更新。</dd>
+            <dt>收益</dt>
+            <dd class="gain">有昇腾集群的团队，第一次能拿到「官方同款」而非魔改版。</dd>
+          </dl>
+        </div>
+      </div>
+
+      <div class="note">
+        <p><strong>别误读这 8 条：</strong>DeepInfer 没有发明新的并行范式，也没有解决在线服务的全部问题。它的稀缺性在于「DeepSeek 自己在用」——这意味着这些取舍（只支持一种模型、一代硬件）是被真实生产流量验证过的，而不是论文里的最优解。</p>
+      </div>
+    </section>
+
+    <!-- ============ 05 COMPARE ============ -->
+    <section id="compare">
+      <div class="eyebrow">05 / 横向对比</div>
+      <h2>vLLM / SGLang / DeepInfer 三方对照</h2>
+      <p class="lead">三者定位互补：通用性、前缀复用、DeepSeek 特化，各占一角。</p>
+
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>维度</th>
+              <th>vLLM</th>
+              <th>SGLang</th>
+              <th>DeepInfer</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>核心定位</td>
+              <td>通用推理服务，模型 / 硬件覆盖最广</td>
+              <td>高性能服务，长前缀复用与 PD 分离</td>
+              <td class="hl">DeepSeek 官方生产框架，架构级特化</td>
+            </tr>
+            <tr>
+              <td>关键技术</td>
+              <td>PagedAttention</td>
+              <td>RadixAttention（基数树前缀缓存）</td>
+              <td class="hl">FlashMLA · EPLB · DSpark · SWA Replay</td>
+            </tr>
+            <tr>
+              <td>NVIDIA 最低要求</td>
+              <td>Ampere 起</td>
+              <td>Ampere 起</td>
+              <td class="hl">SM100（Blackwell）</td>
+            </tr>
+            <tr>
+              <td>消费级显卡</td>
+              <td><span class="yes">✓</span></td>
+              <td><span class="yes">✓</span></td>
+              <td><span class="no">✕</span></td>
+            </tr>
+            <tr>
+              <td>华为昇腾</td>
+              <td><span class="no">✕</span></td>
+              <td><span class="no">✕</span></td>
+              <td><span class="yes">✓ 昇腾 950</span></td>
+            </tr>
+            <tr>
+              <td>模型覆盖</td>
+              <td>最广（几乎全生态）</td>
+              <td>很广</td>
+              <td class="hl">仅 V4.1-Flash（当前）</td>
+            </tr>
+            <tr>
+              <td>量化支持</td>
+              <td>FP8 / NVFP4 / AWQ / GPTQ…</td>
+              <td>FP8 / INT4 等</td>
+              <td class="hl">当前 BF16（据第三方）</td>
+            </tr>
+            <tr>
+              <td>在线服务完备度</td>
+              <td><span class="yes">完整</span>（OpenAI 兼容、指标齐全）</td>
+              <td><span class="yes">完整</span>（PD 分离生产验证）</td>
+              <td><span class="part">离线版</span>（缺 KV cache / LB）</td>
+            </tr>
+            <tr>
+              <td>环境门槛</td>
+              <td>Python 3.9+，CUDA 12.x</td>
+              <td>Python 3.9+，CUDA 12.x</td>
+              <td class="hl">Python 3.12，CUDA 13</td>
+            </tr>
+            <tr>
+              <td>上手成本</td>
+              <td>低（<code>pip install vllm</code>）</td>
+              <td>低</td>
+              <td><span class="part">中高</span>（源码构建 + 新硬件）</td>
+            </tr>
+            <tr>
+              <td>许可证</td>
+              <td>Apache 2.0</td>
+              <td>Apache 2.0</td>
+              <td>Apache 2.0</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="warn">
+        <p><strong>关于「快多少」：</strong>官方只发布了自家在 4 卡 Prefill + 64 卡 Decode 配置下的 Prefill/Decode Pareto 曲线，<strong>没有给出与 vLLM / SGLang 的直接对比数字</strong>。网上流传的倍数大多为推算。要做采购或迁移决策，请在目标硬件上用同一模型、同一并发复现基准（仓库提供 <code>examples/sweep/run_sweep.sh</code>）。</p>
+      </div>
+    </section>
+
+    <!-- ============ 06 LIMITS ============ -->
+    <section id="limits">
+      <div class="eyebrow">06 / 前置条件</div>
+      <h2>硬件门槛与能力边界：先确认你跑得起来</h2>
+
+      <div class="grid grid-2">
+        <div class="card">
+          <div class="kicker">支持</div>
+          <h4>两代平台，别无分号</h4>
+          <p><strong>NVIDIA SM100</strong>（Blackwell，如 B200 一档）配 CUDA 13；<strong>华为昇腾 950</strong> 配 CANN 9.2。系统要求 Linux、GCC ≥ 13、Python 3.12。</p>
+        </div>
+        <div class="card">
+          <div class="kicker">不支持</div>
+          <h4>消费级与上一代数据中心卡</h4>
+          <p>A100 / H100 / RTX 4090 等均不在支持列表。想在 4090 上跑 DeepInfer 目前没有路径，请继续用 vLLM + 量化。</p>
+        </div>
+        <div class="card">
+          <div class="kicker">已具备</div>
+          <h4>离线推理的完整核心</h4>
+          <p>并行策略、投机解码、SWA 回放、异步调度、确定性推理、结构化输出——README 列出的能力都可直接用。</p>
+        </div>
+        <div class="card">
+          <div class="kicker">尚缺</div>
+          <h4>在线服务三件套</h4>
+          <p>KV cache 系统、VE/Prefill/Decode 分离部署（引擎侧大部分已实现）、跨 DP 副本的 prefill/decode 负载均衡。</p>
+        </div>
+      </div>
+
+      <div class="warn">
+        <p><strong>一个流传较广的笔误：</strong>部分中文解读把支持硬件写成「SM100（Blackwell，如 H200/B200）」。H200 属于 Hopper（SM90），并非 SM100。请以官方 README 的「NVIDIA SM100 GPUs」为准。</p>
+      </div>
+    </section>
+
+    <!-- ============ 07 QUICKSTART ============ -->
+    <section id="quickstart">
+      <div class="eyebrow">07 / 上手</div>
+      <h2>快速上手：从源码到第一条输出</h2>
+      <p class="lead">官方只提供源码构建路径，没有 <code>pip install</code>。以下命令均来自仓库 README 与 <code>build.sh</code>。</p>
+
+      <div class="steps">
+        <div class="step">
+          <h4>准备一个干净的 Python 3.12 环境</h4>
+          <p>官方特别提示：构建前请创建一个<em>空的</em> Python 3.12 环境，避免与已有 CUDA / torch 版本冲突。</p>
+          <div class="code-block">
+            <span class="lang">bash</span>
+            <pre><code>git clone https://github.com/deepseek-ai/DeepInfer.git
+cd DeepInfer
+
+python3.12 -m venv .venv
+source .venv/bin/activate
+python -V   # 必须是 3.12.x</code></pre>
+          </div>
+        </div>
+
+        <div class="step">
+          <h4>选择加速卡后端并构建</h4>
+          <p><code>build.sh</code> 会做四件事：装 requirements、把 NCCL 打到 2.32.3（仅 NVIDIA）、编译 vendored 依赖、编译并安装 DeepInfer。这个过程较慢，建议预留时间。</p>
+          <div class="tabs" data-tabs>
+            <div class="tab-bar" role="tablist">
+              <button class="tab-btn" role="tab" aria-selected="true" data-tab="nv">NVIDIA（SM100）</button>
+              <button class="tab-btn" role="tab" aria-selected="false" data-tab="asc">华为昇腾 950</button>
+            </div>
+            <div class="tab-panel" data-panel="nv">
+              <div class="code-block">
+                <span class="lang">bash</span>
+                <pre><code>export DEEPINFER_ACCELERATOR=nvidia
+./build.sh
+
+# 构建完成后，这个变量仍需保留在运行环境中</code></pre>
+              </div>
+            </div>
+            <div class="tab-panel" data-panel="asc" hidden>
+              <div class="code-block">
+                <span class="lang">bash</span>
+                <pre><code>export DEEPINFER_ACCELERATOR=ascend
+./build.sh
+
+# 依赖 CANN 9.2，构建前请确认驱动与工具链就绪</code></pre>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="step">
+          <h4>跑通官方离线示例</h4>
+          <p>默认加载 <code>deepseek-ai/DeepSeek-V4.1-Flash-1017</code>，首次运行会自动下载到 HuggingFace 缓存。想用本地权重就设 <code>DEEPINFER_HF_MODEL_DIR</code>。</p>
+          <div class="code-block">
+            <span class="lang">bash</span>
+            <pre><code># 默认：自动下载 V4.1-Flash-1017
+python examples/offline_inference.py
+
+# 或使用本地权重目录
+DEEPINFER_HF_MODEL_DIR=/path/to/DeepSeek-V4.1-Flash-1017 \
+  python examples/offline_inference.py</code></pre>
+          </div>
+          <p>示例脚本的默认并行配置为 <code>--ep 8</code>、<code>--cp 1</code>，并按 <code>dp = ep / cp</code> 推导 DP 规模；<code>max_num_batched_tokens=32768</code>、<code>max_model_len=32768</code>、<code>gpu_memory_utilization=0.85</code>。</p>
+        </div>
+
+        <div class="step">
+          <h4>按机器规模调整参数</h4>
+          <p>可用参数一览（来自 <code>examples/offline_inference.py</code> 的 argparse 定义）：</p>
+          <div class="code-block">
+            <span class="lang">bash</span>
+            <pre><code>python examples/offline_inference.py \
+  --model_name deepseek-ai/DeepSeek-V4.1-Flash-1017 \
+  --ep 8 \
+  --cp 1 \
+  --dp 8 \
+  --sampler_force_topk 4096 \
+  --long_context \
+  --check_structured_output</code></pre>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr><th>参数</th><th>含义</th><th>默认</th></tr>
+              </thead>
+              <tbody>
+                <tr><td><code>--ep</code></td><td>专家并行度（MoE EP）</td><td><code>8</code></td></tr>
+                <tr><td><code>--cp</code></td><td>上下文并行度（均衡 CP）</td><td><code>1</code></td></tr>
+                <tr><td><code>--dp</code></td><td>数据并行度，不填时按 <code>ep / cp</code> 推导</td><td><code>ep // cp</code></td></tr>
+                <tr><td><code>--disable_eplb</code></td><td>关闭专家负载均衡（排查异常时可关）</td><td>不关闭</td></tr>
+                <tr><td><code>--sampler_force_topk</code></td><td>采样器的强制 top-k 规模</td><td><code>4096</code></td></tr>
+                <tr><td><code>--long_context</code></td><td>每条样本 16389 输入 + 4096 输出</td><td>关闭</td></tr>
+                <tr><td><code>--check_structured_output</code></td><td>生成后用同一模型自检结构化输出</td><td>关闭</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <p>脚本内还有一条断言：<code>world_size = dp × cp</code> 必须能被 <code>ep</code> 整除，否则直接报错。排机器拓扑时先算清这一点。</p>
+        </div>
+
+        <div class="step">
+          <h4>在代码里直接调用 LLM</h4>
+          <p>接口风格与 vLLM 高度相似（<code>LLM</code> + <code>SamplingParams</code>），迁移成本主要在于环境与算子，而非代码写法。下面这段是<strong>示意</strong>：底层引擎由 <code>create_llm()</code> 组装（见 <code>examples/_config.py</code>），部分关键字参数名请以 <code>deepinfer/entrypoints/llm.py</code> 为准。</p>
+          <div class="code-block">
+            <span class="lang">python</span>
+            <pre><code>import os
+os.environ["DEEPINFER_ACCELERATOR"] = "nvidia"
+
+from deepinfer.entrypoints.llm import LLM
+from deepinfer.sampling_params import SamplingParams
+
+llm = LLM(
+    model="deepseek-ai/DeepSeek-V4.1-Flash-1017",
+    max_model_len=32768,
+    max_num_batched_tokens=32768,
+    max_num_seqs=4,
+    gpu_memory_utilization=0.85,
+)
+
+outs = llm.generate(
+    prompts=["用三句话解释 MoE 的专家并行。"],
+    sampling_params=SamplingParams(temperature=0.6, max_tokens=256),
+    use_tqdm=False,
+)
+
+# 每个 out 是可迭代的 token 序列，末位为结束标记
+for out in outs:
+    text = llm.get_tokenizer().decode(
+        [t.token_id for t in out[:-1]],
+        skip_special_tokens=False,
+        clean_up_tokenization_spaces=False,
+    )
+    print(text)</code></pre>
+          </div>
+        </div>
+      </div>
+
+      <div class="note">
+        <p><strong>没有 HTTP Server：</strong>这个版本主打离线推理，README 的 Getting Started 只有 <code>offline_inference.py</code> 一条路径。要对外提供 OpenAI 兼容接口，需要自己在 <code>LLM</code> 之上包一层服务（或等官方补齐在线能力）。</p>
+      </div>
+    </section>
+
+    <!-- ============ 08 USAGE ============ -->
+    <section id="usage">
+      <div class="eyebrow">08 / 进阶</div>
+      <h2>进阶用法与环境变量速查</h2>
+
+      <h3>环境变量全表</h3>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr><th>变量</th><th>作用</th><th>取值 / 默认</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>DEEPINFER_ACCELERATOR</code></td>
+              <td>选择后端，构建与运行时都要设置</td>
+              <td><code>nvidia</code> / <code>ascend</code></td>
+            </tr>
+            <tr>
+              <td><code>DEEPINFER_HF_MODEL_DIR</code></td>
+              <td>指定本地权重目录，跳过 HF 下载</td>
+              <td>绝对路径</td>
+            </tr>
+            <tr>
+              <td><code>DEEPINFER_ENABLE_MTP_VARLEN</code></td>
+              <td>开启变长 MTP / 投机解码</td>
+              <td><code>0</code> / <code>1</code>；确定性推理时须为 0</td>
+            </tr>
+            <tr>
+              <td><code>DEEPINFER_USE_NEXTN_DECODE</code></td>
+              <td>最大草稿长度</td>
+              <td>默认 <code>5</code></td>
+            </tr>
+            <tr>
+              <td><code>DEEPINFER_YOCO_PREFILL_TRUNCATION_MODE</code></td>
+              <td>SWA 有界重放的截断模式</td>
+              <td>V4.1 默认 <code>compact</code></td>
+            </tr>
+            <tr>
+              <td><code>DEEPINFER_YOCO_PREFILL_KEEP_TOKENS</code></td>
+              <td>保留的后缀 token 数，须覆盖 SWA 窗口 + 最大回溯</td>
+              <td>V4.1 默认 <code>140</code></td>
+            </tr>
+            <tr>
+              <td><code>DEEPINFER_BATCH_INVARIANT</code></td>
+              <td>保证不同 batch 组成下结果一致（仅 NVIDIA）</td>
+              <td><code>0</code> / <code>1</code></td>
+            </tr>
+            <tr>
+              <td><code>DEEPINFER_LOGGING_INTERVAL_STEP</code></td>
+              <td>日志打印间隔步数</td>
+              <td>示例中为 <code>10</code></td>
+            </tr>
+            <tr>
+              <td><code>DEEPINFER_OVERRIDE_NUM_EXTRA_EXPERTS</code></td>
+              <td>冗余物理专家槽位数下限（EPLB 的复制预算）</td>
+              <td>示例设 <code>32</code>，按 EP 规模向上取整</td>
+            </tr>
+            <tr>
+              <td><code>DEEPINFER_EXPERT_COUNT_WINDOW_SIZE</code></td>
+              <td>统计专家负载的滑动窗口长度（步）</td>
+              <td>默认 <code>100</code>，示例设 <code>3</code> 省显存</td>
+            </tr>
+            <tr>
+              <td><code>DEEPINFER_EXPERT_REARRANGEMENT_STEP_INTERVAL</code></td>
+              <td>每隔多少步重算一次专家放置并搬权重</td>
+              <td>示例设 <code>30</code>；不设则不重排</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>确定性推理：三步缺一不可</h3>
+      <p>这是 DeepInfer 相对通用框架最有辨识度的能力之一，但配置容易漏：batch-invariant、关闭变长 MTP、固定 <code>seq_seed</code>——三件事必须同时满足，且仅在 NVIDIA 平台成立。</p>
+      <div class="code-block">
+        <span class="lang">bash</span>
+        <pre><code>DEEPINFER_BATCH_INVARIANT=1 \
+DEEPINFER_ENABLE_MTP_VARLEN=0 \
+  python examples/offline_inference.py</code></pre>
+      </div>
+      <div class="code-block">
+        <span class="lang">python</span>
+        <pre><code>from deepinfer.sampling_params import SamplingParams
+
+sp = SamplingParams(
+    temperature=0.0,
+    max_tokens=512,
+    seq_seed=12345,        # 固定种子，配合上面两个环境变量
+)</code></pre>
+      </div>
+
+      <h3>结构化输出：三种约束形态</h3>
+      <p>官方示例 <code>examples/_structured_output.py</code> 给了三种 <code>schema_type</code>，并断言每种都能以 EOS 正常收尾：</p>
+      <div class="code-block">
+        <span class="lang">python</span>
+        <pre><code>import json
+
+cases = [
+    # 正则：生成形如 AB-123 的编号
+    {"schema_type": "regex", "schema": r"[A-Z]{2}-[0-9]{3}"},
+
+    # JSON Schema：字段与枚举都被约束
+    {"schema_type": "json", "schema": json.dumps({
+        "type": "object",
+        "properties": {
+            "color": {"type": "string", "enum": ["red", "green", "blue"]},
+            "count": {"type": "integer", "enum": [1, 2, 3]},
+        },
+        "required": ["color", "count"],
+        "additionalProperties": False,
+    })},
+
+    # EBNF：适合自定义文法 / DSL
+    {"schema_type": "ebnf",
+     "schema": 'root ::= "answer=" ("yes" | "no") ";level=" [1-3]'},
+]
+
+outs = llm.generate(
+    prompts=[...],
+    sampling_params=[SamplingParams(temperature=0, max_tokens=128, so_args=c)
+                     for c in cases],
+    use_tqdm=False,
+)</code></pre>
+      </div>
+
+      <h3>deepseek-recipe：让输出「长得像官方 API」</h3>
+      <p>与 DeepInfer 同步开源，可独立接入 vLLM / SGLang / TensorRT-LLM 等任意后端。Python 3.10+ 即可安装使用。</p>
+      <div class="code-block">
+        <span class="lang">bash</span>
+        <pre><code>python3 -m pip install deepseek-recipe</code></pre>
+      </div>
+      <div class="code-block">
+        <span class="lang">python</span>
+        <pre><code>from deepseek_recipe import (
+    ChatCompletionRequest, ConversionOptions, DeepseekV41Encoding,
+)
+
+request = ChatCompletionRequest({
+    "model": "DeepSeek-V4.1-Flash",
+    "messages": [{"role": "user", "content": "Hello"}],
+})
+
+converted = request.convert(ConversionOptions())
+rendered = DeepseekV41Encoding().render_conversation(converted.conversation)
+print(rendered.prompt)</code></pre>
+      </div>
+      <p>它负责的是「请求格式 → 内部 Conversation → prompt / token」这一段，并内置了几个容易踩坑的默认值：</p>
+      <ul class="clean">
+        <li><code>resolve_max_tokens</code> 在未指定时自动兜底：普通模式 <strong>8192</strong>，思考模式 <strong>65536</strong>，思考模式 max effort <strong>131072</strong>。</li>
+        <li>支持 Messages / Chat Completions / Responses 三种协议互转，含流式响应与 <code>prefix</code> 续写。</li>
+        <li>图像以 base64 或外链传入，V4.1 会做预处理；V4 不支持图像，会被替换为 <code>[Unsupported Image]</code>。</li>
+        <li>安全提示：<code>ReqwestImageFetcher</code> 默认可访问任意地址，面向不可信请求时务必配置 <code>DestinationFilter</code>（防 SSRF）。</li>
+      </ul>
+
+      <div class="tip">
+        <p><strong>实践建议：</strong>即使短期内不迁移到 DeepInfer，也值得单独接入 deepseek-recipe。它带来的收益（与官方 API 行为一致）是立刻可验证的，而风险仅限于编解码层，不触碰你的推理引擎。</p>
+      </div>
+    </section>
+
+    <!-- ============ 09 CHOOSE ============ -->
+    <section id="choose">
+      <div class="eyebrow">09 / 选型</div>
+      <h2>你该不该用 DeepInfer</h2>
+
+      <div class="grid grid-2">
+        <div class="card">
+          <div class="kicker">适合</div>
+          <h4>这些情况值得上手</h4>
+          <p>① 手里有 SM100 或昇腾 950，且主线模型就是 V4.1-Flash；<br>
+             ② 需要一份「官方怎么调」的基准，用来对标自己的 vLLM 部署；<br>
+             ③ 做离线批量推理、评测、数据合成，对在线 SLA 无要求；<br>
+             ④ 需要确定性 / batch-invariant 能力（RL、回归测试）。</p>
+        </div>
+        <div class="card">
+          <div class="kicker">不适合</div>
+          <h4>这些情况先别折腾</h4>
+          <p>① 只有 RTX 4090 / A100 / H100 —— 跑不起来；<br>
+             ② 需要开箱即用的 OpenAI 兼容在线服务 —— 缺 KV cache 系统与 LB；<br>
+             ③ 要多模型混部 —— 目前只支持 V4.1-Flash；<br>
+             ④ 需要 INT4/FP8 量化压显存 —— 当前为 BF16。</p>
+        </div>
+      </div>
+
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr><th>你的场景</th><th>建议</th><th>原因</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>消费级显卡自建</td><td>vLLM</td><td>DeepInfer 无对应架构支持，vLLM 生态最全</td></tr>
+            <tr><td>多轮对话 / RAG / Agent 前缀高度重复</td><td>SGLang</td><td>RadixAttention 在前缀复用上有结构性优势</td></tr>
+            <tr><td>持有 SM100，只服务 DeepSeek</td><td class="hl">DeepInfer</td><td>官方生产同款，专项算子与调度优化</td></tr>
+            <tr><td>需要昇腾 950 落地</td><td class="hl">DeepInfer</td><td>目前唯一原生支持的开源 DeepSeek 推理框架</td></tr>
+            <tr><td>多模型统一服务</td><td>vLLM</td><td>模型覆盖与插件生态领先</td></tr>
+            <tr><td>只想调 API、不想运维</td><td>官方 API / 云服务</td><td>自建推理栈的隐性成本远高于单价差</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- ============ 10 FAQ ============ -->
+    <section id="faq">
+      <div class="eyebrow">10 / 答疑</div>
+      <h2>常见问题</h2>
+
+      <details open>
+        <summary>DeepInfer 是 vLLM 的竞品还是分支？</summary>
+        <p>官方措辞是「originally built primarily on vLLM」，并致谢 SGLang 与 TensorRT-LLM。它不是 vLLM 的 fork 分支（仓库独立、代码组织不同），但设计上大量继承了 vLLM 的引擎骨架。<strong>准确说法是：以 vLLM 为基础的深度定制实现。</strong></p>
+      </details>
+
+      <details>
+        <summary>和 vLLM 跑同一个模型，到底快多少？</summary>
+        <p>官方没有发布对比数字，只有自家 4+64 卡配置下的 Pareto 曲线。<strong>任何「快 X 倍」的说法都缺少官方出处。</strong>如需决策，请用 <code>examples/sweep/run_sweep.sh</code> 在相同硬件、相同模型、相同并发下自测。理论上 FlashMLA + SWA Replay + DSpark 会给 decode 侧带来可感收益，但幅度强依赖上下文长度与 batch 形态。</p>
+      </details>
+
+      <details>
+        <summary>RTX 4090 / A100 / H100 能跑吗？</summary>
+        <p>不能。README 明确只支持 NVIDIA SM100 与昇腾 950。注意 H100 / H200 属于 Hopper（SM90），不在列表内；部分中文文章把 H200 写成 SM100 是笔误。</p>
+      </details>
+
+      <details>
+        <summary>能直接当在线服务上线吗？</summary>
+        <p>不建议。开源版是离线推理版本，官方列出三项缺失：KV cache 系统、VE/Prefill/Decode 分离部署（引擎侧大部分已实现）、跨 DP 副本的 prefill/decode 负载均衡。另外也没有现成的 HTTP Server 与 OpenAI 兼容层。</p>
+      </details>
+
+      <details>
+        <summary>为什么只支持 V4.1-Flash？其他模型呢？</summary>
+        <p>因为整条栈（算子、EPLB、SWA 回放参数如 keep_tokens=140）都是针对该模型的层数、专家数、窗口大小调的。官方表示新模型的推理代码与优化会持续更新到仓库，但未给出时间表。</p>
+      </details>
+
+      <details>
+        <summary>deepseek-recipe 必须配合 DeepInfer 用吗？</summary>
+        <p>不需要，它是独立库，可接任意后端（vLLM / SGLang / TensorRT-LLM）。它只负责协议转换、prompt 渲染与 token 编解码，模型推理、工具执行、HTTP 传输仍需调用方自己提供。</p>
+      </details>
+
+      <details>
+        <summary>Apache 2.0 可以商用吗？有什么坑？</summary>
+        <p>可以商用、可修改、可闭源分发，只需保留版权与许可声明。真正的「坑」不在许可证，而在工程完备度：在线服务组件缺失、只支持一代硬件、需要源码构建。建议先做 PoC 再谈生产。</p>
+      </details>
+
+      <details>
+        <summary>构建失败最常见的原因？</summary>
+        <p>按官方前置条件逐项核对：Linux、GCC ≥ 13、Python 严格 3.12、NVIDIA 需 CUDA 13（Ascend 需 CANN 9.2），且务必在<strong>空环境</strong>中构建——<code>build.sh</code> 会强制重装 NCCL 2.32.3 并编译 vendored 依赖，与已有 torch 环境冲突时现象往往很隐蔽。</p>
+      </details>
+    </section>
+
+    <!-- ============ 11 REFS ============ -->
+    <section id="refs">
+      <div class="eyebrow">11 / 来源</div>
+      <h2>参考资料</h2>
+      <p class="lead">本文技术细节以官方 README 与源码为准；第三方数据已单独标注。</p>
+
+      <ul class="refs">
+        <li><span class="tag">官方</span><div><a href="https://github.com/deepseek-ai/DeepInfer" target="_blank" rel="noopener noreferrer">deepseek-ai/DeepInfer</a><span class="desc">仓库首页、README、examples/offline_inference.py、build.sh（2026-10 快照）</span></div></li>
+        <li><span class="tag">官方</span><div><a href="https://github.com/deepseek-ai/deepseek-recipe" target="_blank" rel="noopener noreferrer">deepseek-ai/deepseek-recipe</a><span class="desc">Rust 库 + Python 绑定，协议转换与 prompt 渲染</span></div></li>
+        <li><span class="tag">新闻</span><div><a href="https://m.ithome.com/html/1015429.htm" target="_blank" rel="noopener noreferrer">IT之家：DeepSeek 宣布将内部推理框架 DeepInfer 全面开源</a><span class="desc">2026-10-20，官方公告口径与开源动机</span></div></li>
+        <li><span class="tag">解读</span><div><a href="https://news.qiniu.com/archives/1792487632434" target="_blank" rel="noopener noreferrer">一文读懂 DeepInfer</a><span class="desc">组件能力、环境变量与常见问题的中文梳理</span></div></li>
+        <li><span class="tag">对比</span><div><a href="https://news.qiniu.com/archives/1792546603495" target="_blank" rel="noopener noreferrer">vLLM vs SGLang vs DeepInfer 选型</a><span class="desc">三方横向对比与选型建议（含第三方 Star 数快照）</span></div></li>
+        <li><span class="tag">数据</span><div><a href="https://cloud.tencent.com.cn/developer/article/2766826" target="_blank" rel="noopener noreferrer">单集群一天 155 万亿 token</a><span class="desc">第三方测算与成本口径，非官方逐项确认</span></div></li>
+      </ul>
+
+      <div class="note">
+        <p><strong>时效说明：</strong>DeepInfer 于 2026 年 10 月中旬开源，迭代极快（官方承诺持续更新新模型与优化）。本页信息截至 2026-10-25，具体参数、支持范围与接口请在动手前以仓库最新 README 为准。</p>
+      </div>
+    </section>
+
+  </article>
+</div>
+
+<footer>
+  DeepInfer 技术说明 · 单文件 HTML
+  <span class="dot">·</span> 基于公开资料整理
+  <span class="dot">·</span> 2026-10-25
+</footer>
+
+<script>
+(function () {
+  'use strict';
+
+  /* ---------- theme ---------- */
+  var root = document.documentElement;
+  var btn = document.getElementById('themeBtn');
+  var stored = null;
+  try { stored = localStorage.getItem('di-theme'); } catch (e) {}
+  if (stored) { root.setAttribute('data-theme', stored); }
+  else if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) {
+    root.setAttribute('data-theme', 'dark');
+  }
+  btn.addEventListener('click', function () {
+    var next = root.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';
+    root.setAttribute('data-theme', next);
+    try { localStorage.setItem('di-theme', next); } catch (e) {}
+  });
+
+  /* ---------- progress ---------- */
+  var bar = document.getElementById('progress');
+  function onScroll() {
+    var h = document.documentElement;
+    var max = h.scrollHeight - h.clientHeight;
+    bar.style.width = (max > 0 ? (h.scrollTop / max) * 100 : 0) + '%';
+  }
+  window.addEventListener('scroll', onScroll, { passive: true });
+  onScroll();
+
+  /* ---------- copy buttons ---------- */
+  document.querySelectorAll('.code-block').forEach(function (block) {
+    var pre = block.querySelector('pre');
+    if (!pre) return;
+    var b = document.createElement('button');
+    b.className = 'copy';
+    b.type = 'button';
+    b.textContent = '复制';
+    b.addEventListener('click', function () {
+      var text = pre.innerText;
+      function done() {
+        b.textContent = '已复制';
+        b.classList.add('done');
+        setTimeout(function () { b.textContent = '复制'; b.classList.remove('done'); }, 1600);
+      }
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).then(done, fallback);
+      } else { fallback(); }
+      function fallback() {
+        var ta = document.createElement('textarea');
+        ta.value = text;
+        ta.style.position = 'fixed';
+        ta.style.opacity = '0';
+        document.body.appendChild(ta);
+        ta.select();
+        try { document.execCommand('copy'); done(); } catch (e) {}
+        document.body.removeChild(ta);
+      }
+    });
+    block.appendChild(b);
+  });
+
+  /* ---------- tabs ---------- */
+  document.querySelectorAll('[data-tabs]').forEach(function (group) {
+    var btns = group.querySelectorAll('.tab-btn');
+    var panels = group.querySelectorAll('.tab-panel');
+    btns.forEach(function (btnEl) {
+      btnEl.addEventListener('click', function () {
+        btns.forEach(function (x) { x.setAttribute('aria-selected', 'false'); });
+        btnEl.setAttribute('aria-selected', 'true');
+        panels.forEach(function (p) {
+          p.hidden = p.getAttribute('data-panel') !== btnEl.getAttribute('data-tab');
+        });
+      });
+    });
+  });
+
+  /* ---------- scrollspy ---------- */
+  var links = Array.prototype.slice.call(document.querySelectorAll('#tocList a'));
+  var targets = links.map(function (a) { return document.querySelector(a.getAttribute('href')); });
+  var byId = {};
+  links.forEach(function (a) { byId[a.getAttribute('href').slice(1)] = a; });
+
+  if ('IntersectionObserver' in window) {
+    var visible = {};
+    var io = new IntersectionObserver(function (entries) {
+      entries.forEach(function (en) { visible[en.target.id] = en.isIntersecting ? en.intersectionRatio : 0; });
+      var bestId = null, best = 0;
+      Object.keys(visible).forEach(function (id) {
+        if (visible[id] > best) { best = visible[id]; bestId = id; }
+      });
+      if (bestId) {
+        links.forEach(function (a) { a.classList.remove('active'); });
+        if (byId[bestId]) byId[bestId].classList.add('active');
+      }
+    }, { rootMargin: '-72px 0px -55% 0px', threshold: [0, 0.15, 0.4, 0.75, 1] });
+
+    targets.forEach(function (t) { if (t) io.observe(t); });
+  }
+})();
+</script>
+</body>
+</html>
